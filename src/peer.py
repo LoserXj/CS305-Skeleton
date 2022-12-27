@@ -417,7 +417,7 @@ def process_user_input(sock):
 def peer_run(config):
     addr = (config.ip, config.port)
     sock = simsocket.SimSocket(config.identity, addr, verbose=config.verbose)
-    send = Sender(config.ip, config.port, '', '', config.timeout, config.haschunks)
+    # send = Sender(config.ip, config.port, '', '', config.timeout, config.haschunks)
     try:
         while True:
             # 定时器需要一直运行,sender需要一直尝试给receiver发送数据,所以放在主循环
