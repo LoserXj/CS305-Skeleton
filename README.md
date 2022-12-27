@@ -1,3 +1,8 @@
+# 改动备注
+上次计网答疑会说Magic和Team不会用到，实现拥塞控制sender需要实时了解receiver的接收窗口大小，因此将Magic字段改为rwnd，用来传输receiver的rwnd。
+同时当receiver的rwnd = 0时，sender不会像receiver发送数据，为了解决这个问题，需要当rwnd = 0时，sender需要一直向receiver请求rwnd的值。因此将team字段改为update_rwnd,
+update_rwnd = 1时表示sender向receiver请求rwnd的值。以上实现均参考计网中文书3.4-3.7，对于超时时间间隔的计算，采用计算所有正确确认并且没有重传的数据包，具体参考3.5.3，可靠数据传输采用选择重传策略，拥塞控制也实现了快速恢复，具体参考3.7中TCP拥塞控制的FSM图解
+
 # Set up your repo
 First, clone the repo from github and change the git remote tag::
 ```

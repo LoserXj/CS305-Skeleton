@@ -78,6 +78,7 @@ def process_inbound_udp(sock):
         get_header = struct.pack("HBBHHII", socket.htons(52305), 35, 2 , socket.htons(HEADER_LEN), socket.htons(HEADER_LEN+len(get_chunk_hash)), socket.htonl(0), socket.htonl(0))
         get_pkt = get_header+get_chunk_hash
         sock.sendto(get_pkt, from_addr)
+
     elif Type == 3:
         # received a DATA pkt
         ex_received_chunk[ex_downloading_chunkhash] += data
