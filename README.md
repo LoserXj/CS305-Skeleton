@@ -1,3 +1,6 @@
+## 改动说明
+Magic和Team字段是无效字段，我将Magic改成rwnd，因为拥塞控制sender需要实时更新receiver的rwnd。Team改成update_rwnd,update_rwnd=1时意味着sender向receiver请求rwnd。因为当rwnd=0时，sender不会像receiver发送数据，具体参考计网参考教材3.5.5。
+对于可靠数据传输使用的是SR选择重选策略，拥塞控制实现了慢启动，快速恢复，拥塞避免，具体参考3.7中图3-51 TCP拥塞控制的FSM描述。超时时间间隔参考计网中文书3.5.3，其中对于每个已确认并且未重传的数据包计算SampleRTT。
 
 # Set up your repo
 First, clone the repo from github and change the git remote tag::
