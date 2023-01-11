@@ -30,15 +30,14 @@ MAX_PAYLOAD = 1024
 
 config = None
 ex_output_file = None
-ex_sending_chunkhash = ""
+
 ex_received_chunk = dict()
 ex_downloading_chunkhash = ""
 recv = None  # 接收端
 send = None  # 发送端
-send_list = dict()
-receive_list = dict()
+send_list = list()
+receive_list = list()
 to_download = dict()  # 记录总共要下载的chunk数目
-downloaded_count = 0  # 记录已经下载的chunk数目
 
 
 def process_download(sock, chunkfile, outputfile):
@@ -47,29 +46,29 @@ def process_download(sock, chunkfile, outputfile):
     '''
     global ex_output_file
     global ex_received_chunk
-    global ex_downloading_chunkhash
+    global receive_list
     global recv
     global to_download
     ex_output_file = outputfile
-    download_hash = bytes()
     recv_download_hash = ''
     with open(chunkfile, "r") as cf:
         lines = cf.readlines()
         i = 0
         # 每个chunk给所有的peer发送包
         while i < len(lines):
+            download_hash = bytes()
             index, datahash_str = lines[i].strip().split(" ")
             i += 1
             recv_download_hash = datahash_str
 
             to_download[datahash_str] = False
             ex_received_chunk[datahash_str] = bytes()
-            ex_downloading_chunkhash = datahash_str
             datahash = bytes.fromhex(datahash_str)
             download_hash = download_hash + datahash
             update_rwnd = 0
             print("initial receiver object")
-            recv = Receiver(config.ip, config.port, recv_download_hash, outputfile, config.haschunks)
+            recv = Receiver(config.ip, config.port, recv_download_hash, outputfile, config.haschunks, None)
+            receive_list.append(recv)
             print(
                 f"initial receiver object success, receiver host: {recv.host}, receiver port: {recv.port}, receiver downloads chunk hash: {recv.receive_chunk_hash}")
             whohas_header = struct.pack("HBBHHII", socket.htons(recv.rwnd), update_rwnd, 0, socket.htons(HEADER_LEN),
@@ -78,34 +77,35 @@ def process_download(sock, chunkfile, outputfile):
             peer_list = config.peers
             for p in peer_list:
                 if int(p[0]) != config.identity:
+                    # recv.from_addr = (p[1],int(p[2]))
                     print(int(p[2]))
                     sock.sendto(whohas_pkt, (p[1], int(p[2])))
 
 
 def sender_get_type_zero(sock, data, from_addr, update_rwnd, rwnd):
     global config
-    global ex_sending_chunkhash
+
     global send
+
     whohas_chunk_hash = data[:20]
     chunkhash_str = bytes.hex(whohas_chunk_hash)
-    ex_sending_chunkhash = chunkhash_str
+
     print(f"whohas: {chunkhash_str}, has: {list(config.haschunks.keys())}")
     if chunkhash_str in config.haschunks:
         # team需要特殊化
         #  def __init__(self,host,port,chunk_hash,send_addr,time_out):
-        if send == None:
-            print("initial sender object")
-            use_RTT = True
-            if config.timeout == 0:
-                use_RTT = False
-                config.timeout = 30
-            send = Sender(config.ip, config.port, chunkhash_str, from_addr, config.timeout, config.haschunks, use_RTT)
-            send.rwnd = rwnd
-            print(
-                f"initial sender object success, sender host : {send.host} , sender port : {send.port} , sender sends chunk hash : {send.chunk_hash} , "
-                f"send has rwnd : {send.rwnd}")
-        else:
-            print("sender object has existed")
+
+        print("initial sender object")
+        use_RTT = True
+        if config.timeout == 0:
+            use_RTT = False
+            config.timeout = 30
+        send = Sender(config.ip, config.port, chunkhash_str, from_addr, config.timeout, config.haschunks, use_RTT)
+        send.rwnd = rwnd
+        print(
+            f"initial sender object success, sender host : {send.host} , sender port : {send.port} , sender sends chunk hash : {send.chunk_hash} , "
+            f"send has rwnd : {send.rwnd}")
+
         ihave_header = struct.pack("HBBHHII", send.rwnd, 0, 1, socket.htons(HEADER_LEN),
                                    socket.htons(HEADER_LEN + len(whohas_chunk_hash)), socket.htonl(0),
                                    socket.htonl(0))
@@ -115,13 +115,22 @@ def sender_get_type_zero(sock, data, from_addr, update_rwnd, rwnd):
 
 def receiver_get_type_one(sock, data, from_addr, update_rwnd):
     global config
-    global ex_sending_chunkhash
+
     global recv
     global receive_list
     get_chunk_hash = data[:20]
+    chunkhash_str = bytes.hex(get_chunk_hash)
+    print(chunkhash_str)
+    for r in receive_list:
+        print(r.receive_chunk_hash)
+        if r.receive_chunk_hash == chunkhash_str:
+            recv = r
+            break
     recv.send_addr = from_addr
     recv.finish_handshaking = True
-    receive_list[from_addr] = recv
+    recv.from_addr = from_addr
+
+    print(f"recver chunk: {recv.receive_chunk_hash}, fromaddr: {recv.from_addr}")
     print(f"receiver finishes shaking hand and the server address is {recv.send_addr}")
     get_header = struct.pack("HBBHHII", socket.htons(recv.rwnd), 0, 2, socket.htons(HEADER_LEN),
                              socket.htons(HEADER_LEN + len(get_chunk_hash)), socket.htonl(0), socket.htonl(0))
@@ -131,9 +140,7 @@ def receiver_get_type_one(sock, data, from_addr, update_rwnd):
 
 def sender_get_type_two(sock, from_addr, update_rwnd, rwnd):
     global config
-    global ex_sending_chunkhash
     global send
-    global recv
     global send_list
     # send = Sender(config.ip, config.port, '', from_addr, config.timeout, config.haschunks)
     # 获得需要get的pkt
@@ -142,7 +149,7 @@ def sender_get_type_two(sock, from_addr, update_rwnd, rwnd):
         print("the sender's send_addr is not the same with addr getted from socket")
         return
     send.finish_hand_shake = True
-    send_list[from_addr] = send
+    send_list.append(send)
     # 发送窗口中数据小于最大容量时，尝试添加新数据
     send_size = min(int(send.rwnd), int(send.cwnd))
     for i in range(send_size):
@@ -158,7 +165,7 @@ def sender_get_type_two(sock, from_addr, update_rwnd, rwnd):
             break
         # 封装数据进Data类
         seq = send.next_seq_num
-        msg = config.haschunks[ex_sending_chunkhash][(seq - 1) * MAX_PAYLOAD:seq * MAX_PAYLOAD]
+        msg = config.haschunks[send.chunk_hash][(seq - 1) * MAX_PAYLOAD:seq * MAX_PAYLOAD]
         data = Data(msg, seq, 1)
         send.send_queue.append(data)
         data_header = struct.pack("HBBHHII", socket.htons(send.rwnd), 0, 3, socket.htons(HEADER_LEN),
@@ -229,7 +236,6 @@ def receiver_get_type_three(sock, data, update_rwnd, seq):
 
 def sender_get_type_four(sock, update_rwnd, ack, rwnd):
     global config
-    global ex_sending_chunkhash
     global send
     global recv
     # send = Sender(config.ip, config.port, '', '', config.timeout, config.haschunks)
@@ -400,10 +406,8 @@ def re_send(sock, update_rwnd, data_resend):
 
 def process_inbound_udp(sock):
     global config
-    global ex_sending_chunkhash
     global send
     global recv
-    global downloaded_count
     global to_download
     # recv = Receiver(config.ip, config.port, '', '', '')
     # send = Sender(config.ip, config.port, '', '', config.timeout, config.haschunks)
@@ -416,13 +420,26 @@ def process_inbound_udp(sock):
         hlen_hton), socket.ntohs(plen_hton), socket.ntohl(Seq_hton), socket.ntohl(Ack_hton)
     data = pkt[HEADER_LEN:]
 
+    whohas_chunk_hash = data[:20]
+    chunkhash_str = bytes.hex(whohas_chunk_hash)
+    print(from_addr)
     # 判断哪个peer
     if type == 3:
-        recv = receive_list[from_addr]
+        for r in receive_list:
+            print("############################ {}".format(recv.from_addr))
+            if r.from_addr == from_addr:
+                recv = r
+                print(recv.from_addr)
+                print(recv.receive_chunk_hash)
+                break
     elif type == 4:
-        send = send_list[from_addr]
+        for s in send_list:
+            if s.send_addr == from_addr:
+                send = s
+                break
 
     if type == 0:
+
         sender_get_type_zero(sock=sock, data=data, from_addr=from_addr, update_rwnd=update_rwnd,
                              rwnd=rwnd)
 
@@ -445,15 +462,17 @@ def process_inbound_udp(sock):
             to_download[recv.receive_chunk_hash] = True
             # 判断所有peer的文件是否都下载完成
             flag = True
+            print(to_download.values())
             for i in to_download.values():
+
                 if not i:
                     flag = False
             if flag:
                 with open(ex_output_file, "wb") as wf:
                     pickle.dump(ex_received_chunk, wf)
-
+                return
             config.haschunks[recv.receive_chunk_hash] = ex_received_chunk[recv.receive_chunk_hash]
-
+            return
             # print(f"GOT {ex_output_file}")
             # sha1 = hashlib.sha1()
             # sha1.update(ex_received_chunk[recv.receive_chunk_hash])
@@ -477,7 +496,7 @@ def process_inbound_udp(sock):
             plt.plot(send.cwnd_list)
             plt.savefig("congestionControlAnalysis.png")
 
-            print(f"finished sending {ex_sending_chunkhash}")
+            print(f"finished sending {send.chunk_hash}")
             send = None
             pass
         else:
@@ -503,58 +522,65 @@ def process_user_input(sock):
 
 
 def peer_run(config):
+    global send
+    global send_list
     addr = (config.ip, config.port)
     sock = simsocket.SimSocket(config.identity, addr, verbose=config.verbose)
+
     # send = Sender(config.ip, config.port, '', '', config.timeout, config.haschunks)
     try:
         while True:
             # 定时器需要一直运行,sender需要一直尝试给receiver发送数据,所以放在主循环
             if send != None:
-                if send.finish_hand_shake:
-                    send_size = min(int(send.rwnd), int(send.cwnd))
-                    # sender需要更新rwnd
-                    if send_size == 0:
-                        update_rwnd_header = struct.pack("HBBHHII", socket.htons(send.rwnd), 1, 3,
-                                                         socket.htons(HEADER_LEN),
-                                                         socket.htons(HEADER_LEN), socket.htonl(0), socket.htonl(0))
-                        sock.sendto(update_rwnd_header, send.send_addr)
-                    for i in range(send_size):
-                        # 如何数据发送完了则不用在发送
-                        if send.base >= 512:
-                            break
-                        # 大于或者等于base+window_size的数据是不能使用的
-                        if send.next_seq_num + 1 > send.base + send.window_size:
-                            # print("data seq is larger than base + window_size , we should drop it out")
-                            break
-                        # 发送队列缓存数据个数不能超过拥塞窗口数量
-                        if send.next_seq_num + 1 - send.base > send_size:
-                            # print("data in send_queue is full")
-                            break
-                        # 封装数据进Data类
-                        seq = send.next_seq_num
-                        msg = config.haschunks[ex_sending_chunkhash][(seq - 1) * MAX_PAYLOAD:seq * MAX_PAYLOAD]
-                        data = Data(msg, seq, 1)
-                        send.send_queue.append(data)
-                        data_header = struct.pack("HBBHHII", socket.htons(send.rwnd), 0, 3, socket.htons(HEADER_LEN),
-                                                  socket.htons(HEADER_LEN), socket.htonl(seq), socket.htonl(0))
-                        send.next_seq_num += 1
-                        # 定时器开始计时,记录每个包发送的时间
-                        send.pkg_time.append(time.time())
-                        sock.sendto(data_header + msg, send.send_addr)
-                        print(
-                            f"send :{seq} , send base : {send.base} , send next_seq_num ; {send.next_seq_num} , send cwnd : {send.cwnd} send queue length : {len(send.send_queue)}")
+                for s in send_list:
 
-                    # 计时器运转，判断是否超时
-                    for i in range(len(send.pkg_time)):
-                        # 没有收到确认的数据需要判断是否超时
-                        data_resend = send.send_queue[i]
-                        if send.send_queue[i].state != 2:
-                            time_now = time.time()
-                            if time_now - send.pkg_time[i] > send.time_out_interval:
-                                # print(f"time_out_seq : {data_resend.seq} ")
-                                re_send(sock=sock, update_rwnd=0, data_resend=data_resend)
-                                data_resend.re_send = True
-                                send.send_queue[i] = data_resend
+                    send = s
+                    if send.finish_hand_shake:
+                        send_size = min(int(send.rwnd), int(send.cwnd))
+                        # sender需要更新rwnd
+                        if send_size == 0:
+                            update_rwnd_header = struct.pack("HBBHHII", socket.htons(send.rwnd), 1, 3,
+                                                             socket.htons(HEADER_LEN),
+                                                             socket.htons(HEADER_LEN), socket.htonl(0), socket.htonl(0))
+                            sock.sendto(update_rwnd_header, send.send_addr)
+                        for i in range(send_size):
+                            # 如何数据发送完了则不用在发送
+                            if send.base >= 512:
+                                break
+                            # 大于或者等于base+window_size的数据是不能使用的
+                            if send.next_seq_num + 1 > send.base + send.window_size:
+                                # print("data seq is larger than base + window_size , we should drop it out")
+                                break
+                            # 发送队列缓存数据个数不能超过拥塞窗口数量
+                            if send.next_seq_num + 1 - send.base > send_size:
+                                # print("data in send_queue is full")
+                                break
+                            # 封装数据进Data类
+                            seq = send.next_seq_num
+                            msg = config.haschunks[send.chunk_hash][(seq - 1) * MAX_PAYLOAD:seq * MAX_PAYLOAD]
+                            data = Data(msg, seq, 1)
+                            send.send_queue.append(data)
+                            data_header = struct.pack("HBBHHII", socket.htons(send.rwnd), 0, 3,
+                                                      socket.htons(HEADER_LEN),
+                                                      socket.htons(HEADER_LEN), socket.htonl(seq), socket.htonl(0))
+                            send.next_seq_num += 1
+                            # 定时器开始计时,记录每个包发送的时间
+                            send.pkg_time.append(time.time())
+                            sock.sendto(data_header + msg, send.send_addr)
+                            print(
+                                f"send :{seq} , send base : {send.base} , send next_seq_num ; {send.next_seq_num} , send cwnd : {send.cwnd} send queue length : {len(send.send_queue)}")
+
+                        # 计时器运转，判断是否超时
+                        for i in range(len(send.pkg_time)):
+                            # 没有收到确认的数据需要判断是否超时
+                            data_resend = send.send_queue[i]
+                            if send.send_queue[i].state != 2:
+                                time_now = time.time()
+                                if time_now - send.pkg_time[i] > send.time_out_interval:
+                                    # print(f"time_out_seq : {data_resend.seq} ")
+                                    re_send(sock=sock, update_rwnd=0, data_resend=data_resend)
+                                    data_resend.re_send = True
+                                    send.send_queue[i] = data_resend
 
             ready = select.select([sock, sys.stdin], [], [], 0.1)
             read_ready = ready[0]
